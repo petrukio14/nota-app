@@ -131,24 +131,38 @@
       btnUpload.disabled = selectedFiles.length === 0;
     }
 
+    // Acorda o servidor ao carregar a pagina
+    fetch('/notas').catch(() => {});
+
     btnUpload.addEventListener('click', async () => {
       if (!selectedFiles.length) return;
       btnUpload.disabled = true;
-      showStatus('Processando...', 'loading');
+      showStatus('Processando... (pode levar ate 30s no primeiro uso)', 'loading');
       const formData = new FormData();
       for (const f of selectedFiles) formData.append('files', f);
-      try {
-        const res = await fetch('/upload', { method: 'POST', body: formData });
-        const data = await res.json();
-        if (!res.ok) { showStatus(data.error || 'Erro', 'error'); return; }
-        showStatus(data.message, data.erros?.length ? 'error' : 'success');
-        currentBatchId = data.batch_id;
-        currentNotas = data.notas.map((n, i) => ({ ...n, id: n.id || `temp_${i}`, status: 'pendente' }));
-        renderNotas(currentNotas);
-        selectedFiles = []; renderFileList();
-        loadHistory();
-      } catch (err) { showStatus('Erro: ' + err.message, 'error'); }
-      finally { btnUpload.disabled = false; }
+      // tenta ate 3x em caso de cold start
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          const res = await fetch('/upload', { method: 'POST', body: formData });
+          const data = await res.json();
+          if (!res.ok) { showStatus(data.error || 'Erro', 'error'); return; }
+          showStatus(data.message, data.erros?.length ? 'error' : 'success');
+          currentBatchId = data.batch_id;
+          currentNotas = data.notas.map((n, i) => ({ ...n, id: n.id || `temp_${i}`, status: 'pendente' }));
+          renderNotas(currentNotas);
+          selectedFiles = []; renderFileList();
+          loadHistory();
+          return;
+        } catch (err) {
+          if (attempt < 2) {
+            showStatus('Servidor acordando... tentativa ' + (attempt+2) + '/3', 'loading');
+            await new Promise(r => setTimeout(r, 10000));
+          } else {
+            showStatus('Servidor esta dormindo. Recarregue a pagina e tente novamente, ou instale o UptimeRobot (veja instrucoes).', 'error');
+          }
+        }
+      }
+      btnUpload.disabled = false;
     });
 
     function renderNotas(notas) {
