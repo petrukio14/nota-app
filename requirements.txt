@@ -1,7 +1,6 @@
 flask>=3.0
 pdfplumber>=0.10
 Pillow>=10
-google-cloud-vision>=3
 openai>=1.0
 python-dotenv>=1.0
 gunicorn>=21.0

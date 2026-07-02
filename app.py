@@ -1,4 +1,5 @@
 import os
+import sys
 import sqlite3
 import json
 from datetime import datetime
@@ -58,7 +59,10 @@ def extract_text_pdf(path):
     return "\n".join(text_parts)
 
 def extract_text_image(path):
-    from google.cloud import vision
+    try:
+        from google.cloud import vision
+    except ImportError:
+        raise Exception("OCR para fotos nao disponivel. Instale google-cloud-vision ou use PDF.")
     client = vision.ImageAnnotatorClient()
     with open(path, "rb") as f:
         content = f.read()
