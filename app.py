@@ -6,15 +6,21 @@ from datetime import datetime
 from pathlib import Path
 from traceback import format_exc
 
+import cloudinary
+import cloudinary.uploader
 from flask import Flask, request, jsonify, render_template
 from werkzeug.utils import secure_filename
 from dotenv import load_dotenv
 
 load_dotenv()
 
+cloudinary.config(
+    cloud_name=os.getenv("CLOUDINARY_CLOUD_NAME"),
+    api_key=os.getenv("CLOUDINARY_API_KEY"),
+    api_secret=os.getenv("CLOUDINARY_API_SECRET"),
+)
+
 app = Flask(__name__)
-app.config["UPLOAD_FOLDER"] = Path("uploads")
-app.config["CANHOTO_FOLDER"] = Path("uploads") / "canhotos"
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024
 ALLOWED_EXTENSIONS = {"pdf", "png", "jpg", "jpeg"}
 IMAGE_EXTENSIONS = {"png", "jpg", "jpeg"}
@@ -22,9 +28,7 @@ IMAGE_EXTENSIONS = {"png", "jpg", "jpeg"}
 DB_PATH = Path("data") / "notas.db"
 TEXTS_DIR = Path("data") / "textos"
 TEXTS_DIR.mkdir(parents=True, exist_ok=True)
-app.config["CANHOTO_FOLDER"].mkdir(parents=True, exist_ok=True)
 
-# --- DB ---
 def init_db():
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute("""
@@ -36,7 +40,8 @@ def init_db():
                 nome_cliente TEXT,
                 endereco TEXT,
                 numero_nota TEXT,
-                canhoto_path TEXT,
+                canhoto_url TEXT,
+                pdf_url TEXT,
                 status TEXT DEFAULT 'pendente',
                 raw_response TEXT,
                 created_at TEXT DEFAULT (datetime('now'))
@@ -47,7 +52,10 @@ init_db()
 def allowed_file(name, exts=ALLOWED_EXTENSIONS):
     return "." in name and name.rsplit(".", 1)[1].lower() in exts
 
-# --- OCR ---
+def upload_to_cloudinary(filepath, folder="notas"):
+    r = cloudinary.uploader.upload(str(filepath), folder=folder, resource_type="auto")
+    return r["secure_url"]
+
 def extract_text_pdf(path):
     import pdfplumber
     text_parts = []
@@ -78,7 +86,6 @@ def extract_text(filepath):
         return extract_text_pdf(filepath)
     return extract_text_image(filepath)
 
-# --- AI extraction ---
 def extract_with_ai(raw_text):
     from openai import OpenAI
     api_key = os.getenv("OPENAI_API_KEY") or os.getenv("OPENROUTER_API_KEY")
@@ -119,7 +126,6 @@ Texto:
         return [parsed]
     return parsed
 
-# --- Routes ---
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -146,12 +152,13 @@ def upload():
             continue
         filename = secure_filename(file.filename)
         unique_name = f"{batch_id}_{filename}"
-        save_path = app.config["UPLOAD_FOLDER"] / unique_name
+        save_path = Path(f"/tmp/{unique_name}")
         file.save(save_path)
         try:
             raw_text = extract_text(save_path)
         except Exception as e:
             erros.append({"file": filename, "error": f"Erro OCR: {str(e)}"})
+            save_path.unlink(missing_ok=True)
             continue
         text_path = TEXTS_DIR / f"{unique_name}.txt"
         text_path.write_text(raw_text, encoding="utf-8")
@@ -159,20 +166,26 @@ def upload():
             notas = extract_with_ai(raw_text)
         except Exception as e:
             erros.append({"file": filename, "error": f"Erro IA: {str(e)}"})
+            save_path.unlink(missing_ok=True)
             continue
+        try:
+            pdf_url = upload_to_cloudinary(save_path, "notas-pdf")
+        except Exception as e:
+            pdf_url = ""
+        save_path.unlink(missing_ok=True)
         for nota in notas:
             dados_json = json.dumps(nota, ensure_ascii=False)
             with sqlite3.connect(DB_PATH) as conn:
                 cur = conn.execute(
                     """INSERT INTO notas
-                       (batch_id, filename, extracted_text, nome_cliente, endereco, numero_nota, raw_response)
-                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                       (batch_id, filename, extracted_text, nome_cliente, endereco, numero_nota, pdf_url, raw_response)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                     (batch_id, unique_name, raw_text,
                      nota.get("nome_cliente", ""), nota.get("endereco", ""),
-                     nota.get("numero_nota", ""), dados_json),
+                     nota.get("numero_nota", ""), pdf_url, dados_json),
                 )
                 nota_id = cur.lastrowid
-            todas.append({**nota, "id": nota_id})
+            todas.append({**nota, "id": nota_id, "pdf_url": pdf_url})
     return jsonify({
         "message": f"{len(todas)} nota(s) processada(s)",
         "notas": todas,
@@ -184,12 +197,13 @@ def upload():
 def list_notas():
     with sqlite3.connect(DB_PATH) as conn:
         rows = conn.execute(
-            "SELECT id, filename, nome_cliente, endereco, numero_nota, status, batch_id, created_at FROM notas ORDER BY id DESC"
+            "SELECT id, filename, nome_cliente, endereco, numero_nota, status, batch_id, pdf_url, canhoto_url, created_at FROM notas ORDER BY id DESC"
         ).fetchall()
     return jsonify([
         {"id": r[0], "filename": r[1], "nome_cliente": r[2] or "",
          "endereco": r[3] or "", "numero_nota": r[4] or "",
-         "status": r[5] or "pendente", "batch_id": r[6], "created_at": r[7]}
+         "status": r[5] or "pendente", "batch_id": r[6],
+         "pdf_url": r[7] or "", "canhoto_url": r[8] or "", "created_at": r[9]}
         for r in rows
     ])
 
@@ -209,11 +223,12 @@ def get_nota(nota_id):
 def get_batch(batch_id):
     with sqlite3.connect(DB_PATH) as conn:
         rows = conn.execute(
-            "SELECT id, nome_cliente, endereco, numero_nota, status FROM notas WHERE batch_id = ? ORDER BY id",
+            "SELECT id, nome_cliente, endereco, numero_nota, status, pdf_url, canhoto_url FROM notas WHERE batch_id = ? ORDER BY id",
             (batch_id,),
         ).fetchall()
     return jsonify([
-        {"id": r[0], "nome_cliente": r[1], "endereco": r[2], "numero_nota": r[3], "status": r[4]}
+        {"id": r[0], "nome_cliente": r[1], "endereco": r[2], "numero_nota": r[3],
+         "status": r[4], "pdf_url": r[5] or "", "canhoto_url": r[6] or ""}
         for r in rows
     ])
 
@@ -226,12 +241,18 @@ def upload_canhoto(nota_id):
         return jsonify({"error": "Apenas PNG/JPG"}), 400
     ext = Path(file.filename).suffix.lower()
     filename = f"canhoto_{nota_id}{ext}"
-    save_path = app.config["CANHOTO_FOLDER"] / filename
+    save_path = Path(f"/tmp/{filename}")
     file.save(save_path)
+    try:
+        url = upload_to_cloudinary(save_path, "canhotos")
+    except Exception as e:
+        save_path.unlink(missing_ok=True)
+        return jsonify({"error": f"Erro ao salvar no Cloudinary: {str(e)}"}), 500
+    save_path.unlink(missing_ok=True)
     with sqlite3.connect(DB_PATH) as conn:
-        conn.execute("UPDATE notas SET canhoto_path = ?, status = 'entregue' WHERE id = ?",
-                     (str(save_path), nota_id))
-    return jsonify({"message": "Canhoto salvo!", "path": str(save_path)})
+        conn.execute("UPDATE notas SET canhoto_url = ?, status = 'entregue' WHERE id = ?",
+                     (url, nota_id))
+    return jsonify({"message": "Canhoto salvo na nuvem!", "canhoto_url": url})
 
 @app.errorhandler(Exception)
 def handle_error(e):

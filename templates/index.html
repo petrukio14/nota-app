@@ -198,7 +198,8 @@
       notas.forEach((n, i) => {
         const statusClass = n.status === 'entregue' ? 'tag-entregue' : 'tag-pendente';
         const statusLabel = n.status === 'entregue' ? 'Entregue' : 'Pendente';
-        const canhoto = n.canhoto_path ? `<span class="tag-entregue" style="font-size:.7rem;">&#128247; Foto salva</span>` : '';
+        const pdfLink = n.pdf_url ? `<a href="${n.pdf_url}" target="_blank" style="font-size:.75rem;">&#128196; Download PDF</a>` : '';
+        const canhotoLink = n.canhoto_url ? `<a href="${n.canhoto_url}" target="_blank" style="font-size:.75rem;">&#128247; Ver Canhoto</a>` : '';
         html += `
           <div class="nota-card info" data-index="${i}">
             <div class="route-num">${i + 1}</div>
@@ -206,7 +207,11 @@
               <div class="field"><label>Cliente:</label> <span class="value">${n.nome_cliente || '-'}</span></div>
               <div class="field"><label>Endereço:</label> <span class="value">${n.endereco || '-'}</span></div>
               <div class="field"><label>Nº NF:</label> <span class="value">${n.numero_nota || '-'}</span></div>
-              <div style="margin-top:6px;"><span class="${statusClass}">${statusLabel}</span> ${canhoto}</div>
+              <div style="margin-top:6px;">
+                <span class="${statusClass}">${statusLabel}</span>
+                ${pdfLink ? ' | ' + pdfLink : ''}
+                ${canhotoLink ? ' | ' + canhotoLink : ''}
+              </div>
             </div>
             <div class="actions">
               <label class="btn btn-secondary btn-sm btn-block" style="cursor:pointer;text-align:center;">
@@ -229,7 +234,7 @@
         const data = await res.json();
         if (!res.ok) { alert('Erro: ' + data.error); return; }
         currentNotas[index].status = 'entregue';
-        currentNotas[index].canhoto_path = data.path;
+        currentNotas[index].canhoto_url = data.canhoto_url;
         renderNotas(currentNotas);
       } catch(e) { alert('Erro: ' + e.message); }
     };
@@ -266,8 +271,11 @@
           const st = n.status === 'entregue'
             ? '<span class="tag-entregue">Entregue</span>'
             : '<span class="tag-pendente">Pendente</span>';
+          const links = [];
+          if (n.pdf_url) links.push(`<a href="${n.pdf_url}" target="_blank" style="font-size:.7rem;">PDF</a>`);
+          if (n.canhoto_url) links.push(`<a href="${n.canhoto_url}" target="_blank" style="font-size:.7rem;">Canhoto</a>`);
           const tr = document.createElement('tr');
-          tr.innerHTML = `<td>${n.id}</td><td>${n.nome_cliente || '-'}</td><td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${n.endereco || '-'}</td><td>${n.numero_nota || '-'}</td><td>${st}</td><td>${n.created_at}</td><td><button class="btn btn-secondary btn-sm" onclick="viewNota(${n.id})">Ver</button></td>`;
+          tr.innerHTML = `<td>${n.id}</td><td>${n.nome_cliente || '-'}</td><td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${n.endereco || '-'}</td><td>${n.numero_nota || '-'}</td><td>${st}</td><td>${n.created_at}</td><td>${links.join(' | ')}<button class="btn btn-secondary btn-sm" onclick="viewNota(${n.id})" style="margin-left:4px;">Ver</button></td>`;
           tbody.appendChild(tr);
         });
       } catch(e) {}
