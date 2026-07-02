@@ -85,6 +85,10 @@ def init_db():
         if not cur.fetchone():
             conn.execute("INSERT INTO usuarios (username, password, admin) VALUES (?, ?, 1)",
                          ("admin", "admin123"))
+        # atualiza senha do admin via env var se definida
+        env_pass = os.getenv("ADMIN_PASS")
+        if env_pass:
+            conn.execute("UPDATE usuarios SET password = ? WHERE username = 'admin'", (env_pass,))
 init_db()
 
 def limpar_antigas():
