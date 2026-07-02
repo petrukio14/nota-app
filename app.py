@@ -20,7 +20,7 @@ IMAGE_EXTENSIONS = {"png", "jpg", "jpeg"}
 
 DB_PATH = Path("data") / "notas.db"
 TEXTS_DIR = Path("data") / "textos"
-TEXTS_DIR.mkdir(exist_ok=True)
+TEXTS_DIR.mkdir(parents=True, exist_ok=True)
 app.config["CANHOTO_FOLDER"].mkdir(parents=True, exist_ok=True)
 
 # --- DB ---
