@@ -120,6 +120,10 @@ Texto:
 def index():
     return render_template("index.html")
 
+@app.route("/ping")
+def ping():
+    return jsonify({"ok": True, "python": sys.version})
+
 @app.route("/upload", methods=["POST"])
 def upload():
     if "files" not in request.files:
