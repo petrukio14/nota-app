@@ -237,7 +237,7 @@
 
     function atualizarBotoes() {
       const pendentes = getPendentes().length;
-      btnHistorico.disabled = pendentes > 0 || !podeHistorico;
+      btnHistorico.disabled = !podeHistorico || (pendentes > 0 && !isAdmin);
     }
 
     window.uploadCanhoto = async function(notaId, input, index) {
