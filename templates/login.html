@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Login - Leitor de Notas</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f0f2f5; display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+    .card { background: #fff; border-radius: 12px; padding: 32px; box-shadow: 0 1px 3px rgba(0,0,0,.08); width: 100%; max-width: 380px; }
+    h1 { font-size: 1.3rem; margin-bottom: 24px; text-align: center; }
+    input { width: 100%; padding: 12px; border: 1px solid #e5e7eb; border-radius: 6px; font-size: .9rem; margin-bottom: 12px; }
+    input:focus { outline: none; border-color: #2563eb; }
+    .btn { width: 100%; padding: 12px; border-radius: 6px; border: none; font-size: .9rem; cursor: pointer; background: #2563eb; color: #fff; font-weight: 500; }
+    .btn:hover { opacity: .85; }
+    .erro { color: #991b1b; text-align: center; margin-bottom: 12px; font-size: .85rem; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>&#128274; Login</h1>
+    {% if erro %}<div class="erro">{{ erro }}</div>{% endif %}
+    <form method="POST">
+      <input type="text" name="user" placeholder="Usuário" required autofocus>
+      <input type="password" name="pass" placeholder="Senha" required>
+      <button class="btn" type="submit">Entrar</button>
+    </form>
+  </div>
+</body>
+</html>

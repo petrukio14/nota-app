@@ -5,10 +5,11 @@ import json
 from datetime import datetime, timedelta
 from pathlib import Path
 from traceback import format_exc
+from functools import wraps
 
 import cloudinary
 import cloudinary.uploader
-from flask import Flask, request, jsonify, render_template
+from flask import Flask, request, jsonify, render_template, session, redirect, url_for
 from werkzeug.utils import secure_filename
 from dotenv import load_dotenv
 
@@ -21,6 +22,7 @@ cloudinary.config(
 )
 
 app = Flask(__name__)
+app.secret_key = os.getenv("SECRET_KEY", os.urandom(24).hex())
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024
 ALLOWED_EXTENSIONS = {"pdf", "png", "jpg", "jpeg"}
 IMAGE_EXTENSIONS = {"png", "jpg", "jpeg"}
@@ -29,6 +31,21 @@ DB_PATH = Path("data") / "notas.db"
 TEXTS_DIR = Path("data") / "textos"
 TEXTS_DIR.mkdir(parents=True, exist_ok=True)
 
+# --- auth config ---
+ADMIN_USER = os.getenv("ADMIN_USER", "admin")
+ADMIN_PASS = os.getenv("ADMIN_PASS", "admin123")
+
+def login_required(f):
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        if not session.get("logado"):
+            if request.is_json or request.path.startswith("/api/"):
+                return jsonify({"error": "Não autorizado"}), 401
+            return redirect(url_for("login"))
+        return f(*args, **kwargs)
+    return wrapper
+
+# --- DB ---
 def init_db():
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute("""
@@ -49,8 +66,8 @@ def init_db():
 init_db()
 
 def limpar_antigas():
-    from datetime import timedelta
     limite = datetime.now() - timedelta(days=365)
+    removidas = 0
     with sqlite3.connect(DB_PATH) as conn:
         rows = conn.execute(
             "SELECT id, canhoto_url FROM notas WHERE created_at < ?", (limite.strftime("%Y-%m-%d %H:%M:%S"),)
@@ -64,9 +81,15 @@ def limpar_antigas():
                 except:
                     pass
             conn.execute("DELETE FROM notas WHERE id = ?", (nota_id,))
-    return len(rows)
+            removidas += 1
+    return removidas
 
 limpar_antigas()
+
+def nf_existe(numero):
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute("SELECT id FROM notas WHERE numero_nota = ?", (numero,)).fetchone()
+        return row is not None
 
 def allowed_file(name, exts=ALLOWED_EXTENSIONS):
     return "." in name and name.rsplit(".", 1)[1].lower() in exts
@@ -145,7 +168,29 @@ Texto:
         return [parsed]
     return parsed
 
+# --- auth routes ---
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "POST":
+        data = request.get_json() or request.form
+        if data.get("user") == ADMIN_USER and data.get("pass") == ADMIN_PASS:
+            session["logado"] = True
+            if request.is_json:
+                return jsonify({"ok": True})
+            return redirect(url_for("index"))
+        if request.is_json:
+            return jsonify({"error": "Usuário ou senha inválidos"}), 401
+        return render_template("login.html", erro="Usuário ou senha inválidos")
+    return render_template("login.html")
+
+@app.route("/logout")
+def logout():
+    session.pop("logado", None)
+    return redirect(url_for("login"))
+
+# --- protected routes ---
 @app.route("/")
+@login_required
 def index():
     return render_template("index.html")
 
@@ -154,6 +199,7 @@ def ping():
     return jsonify({"ok": True, "python": sys.version})
 
 @app.route("/upload", methods=["POST"])
+@login_required
 def upload():
     if "files" not in request.files:
         return jsonify({"error": "Nenhum arquivo enviado"}), 400
@@ -164,6 +210,7 @@ def upload():
     batch_id = datetime.now().strftime("%Y%m%d_%H%M%S")
     todas = []
     erros = []
+    ignoradas = 0
 
     for file in files:
         if not allowed_file(file.filename):
@@ -189,6 +236,11 @@ def upload():
             continue
         save_path.unlink(missing_ok=True)
         for nota in notas:
+            nf_num = nota.get("numero_nota", "").strip()
+            if nf_num and nf_existe(nf_num):
+                ignoradas += 1
+                erros.append({"file": filename, "error": f"NF {nf_num} já existe no banco"})
+                continue
             dados_json = json.dumps(nota, ensure_ascii=False)
             with sqlite3.connect(DB_PATH) as conn:
                 cur = conn.execute(
@@ -197,18 +249,17 @@ def upload():
                        VALUES (?, ?, ?, ?, ?, ?, ?)""",
                     (batch_id, unique_name, raw_text,
                      nota.get("nome_cliente", ""), nota.get("endereco", ""),
-                     nota.get("numero_nota", ""), dados_json),
+                     nf_num, dados_json),
                 )
                 nota_id = cur.lastrowid
             todas.append({**nota, "id": nota_id})
-    return jsonify({
-        "message": f"{len(todas)} nota(s) processada(s)",
-        "notas": todas,
-        "erros": erros,
-        "batch_id": batch_id,
-    })
+    msg = f"{len(todas)} nota(s) processada(s)"
+    if ignoradas:
+        msg += f", {ignoradas} ignorada(s) por duplicidade"
+    return jsonify({"message": msg, "notas": todas, "erros": erros, "batch_id": batch_id})
 
 @app.route("/notas")
+@login_required
 def list_notas():
     with sqlite3.connect(DB_PATH) as conn:
         rows = conn.execute(
@@ -223,6 +274,7 @@ def list_notas():
     ])
 
 @app.route("/notas/<int:nota_id>")
+@login_required
 def get_nota(nota_id):
     with sqlite3.connect(DB_PATH) as conn:
         row = conn.execute("SELECT * FROM notas WHERE id = ?", (nota_id,)).fetchone()
@@ -235,6 +287,7 @@ def get_nota(nota_id):
     return jsonify(d)
 
 @app.route("/batch/<batch_id>")
+@login_required
 def get_batch(batch_id):
     with sqlite3.connect(DB_PATH) as conn:
         rows = conn.execute(
@@ -248,6 +301,7 @@ def get_batch(batch_id):
     ])
 
 @app.route("/upload-canhoto/<int:nota_id>", methods=["POST"])
+@login_required
 def upload_canhoto(nota_id):
     if "file" not in request.files:
         return jsonify({"error": "Nenhum arquivo"}), 400
@@ -270,11 +324,13 @@ def upload_canhoto(nota_id):
     return jsonify({"message": "Canhoto salvo na nuvem!", "canhoto_url": url})
 
 @app.route("/admin/limpar", methods=["POST"])
+@login_required
 def admin_limpar():
     qtd = limpar_antigas()
     return jsonify({"message": f"{qtd} nota(s) antiga(s) removida(s)"})
 
 @app.route("/notas/busca")
+@login_required
 def busca_notas():
     q = request.args.get("q", "").strip()
     with sqlite3.connect(DB_PATH) as conn:
