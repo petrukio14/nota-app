@@ -58,7 +58,13 @@
 </head>
 <body>
   <div class="container">
-    <h1>&#128196; Leitor de Notas Fiscais <a href="/logout" style="font-size:.75rem;font-weight:400;color:#888;margin-left:auto;text-decoration:none;">Sair</a></h1>
+    <h1>&#128196; Leitor de Notas Fiscais
+      <span style="font-size:.75rem;font-weight:400;color:#888;margin-left:auto;">
+        {{ username }}
+        {% if admin %}| <a href="#" onclick="adminPanel()" style="color:#2563eb;text-decoration:none;">Admin</a>{% endif %}
+        | <a href="/logout" style="color:#888;text-decoration:none;">Sair</a>
+      </span>
+    </h1>
 
     <div class="card">
       <div class="upload-area" id="dropZone">
@@ -297,6 +303,53 @@
     };
 
     loadHistory();
+
+    window.adminPanel = async function() {
+      const res = await fetch('/admin/usuarios');
+      const usuarios = await res.json();
+      let html = '<h3 style="margin-bottom:12px;">Gerenciar Usuários</h3>';
+      html += '<table style="font-size:.85rem;margin-bottom:16px;"><thead><tr><th>ID</th><th>Usuário</th><th>Admin</th><th></th></tr></thead><tbody>';
+      usuarios.forEach(u => {
+        html += `<tr><td>${u.id}</td><td>${u.username}</td><td>${u.admin ? 'Sim' : 'Não'}</td><td>${u.admin ? '' : '<button class="btn btn-secondary btn-sm" onclick="deletarUsuario('+u.id+')">Remover</button>'}</td></tr>`;
+      });
+      html += '</tbody></table>';
+      html += '<div style="display:flex;gap:8px;flex-wrap:wrap;"><input type="text" id="novoUser" placeholder="Usuário" style="flex:1;padding:8px;border:1px solid #e5e7eb;border-radius:6px;"><input type="password" id="novaSenha" placeholder="Senha" style="flex:1;padding:8px;border:1px solid #e5e7eb;border-radius:6px;"><button class="btn btn-primary btn-sm" onclick="criarUsuario()">Criar</button></div>';
+      mostrarModal(html);
+    };
+
+    window.mostrarModal = function(html) {
+      let div = document.getElementById('modal');
+      if (!div) {
+        div = document.createElement('div');
+        div.id = 'modal';
+        div.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;z-index:999;';
+        div.addEventListener('click', e => { if (e.target === div) div.remove(); });
+        document.body.appendChild(div);
+      }
+      div.innerHTML = `<div style="background:#fff;border-radius:12px;padding:24px;max-width:500px;width:90%;max-height:80vh;overflow:auto;">${html}</div>`;
+    };
+
+    window.criarUsuario = async function() {
+      const username = document.getElementById('novoUser').value.trim();
+      const password = document.getElementById('novaSenha').value.trim();
+      if (!username || !password) { alert('Preencha usuário e senha'); return; }
+      const res = await fetch('/admin/usuarios', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({username, password}),
+      });
+      const data = await res.json();
+      alert(data.message || data.error);
+      if (res.ok) adminPanel();
+    };
+
+    window.deletarUsuario = async function(id) {
+      if (!confirm('Remover usuário?')) return;
+      const res = await fetch('/admin/usuarios/' + id, { method: 'DELETE' });
+      const data = await res.json();
+      alert(data.message || data.error);
+      adminPanel();
+    };
   </script>
 </body>
 </html>

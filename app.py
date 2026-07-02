@@ -31,17 +31,26 @@ DB_PATH = Path("data") / "notas.db"
 TEXTS_DIR = Path("data") / "textos"
 TEXTS_DIR.mkdir(parents=True, exist_ok=True)
 
-# --- auth config ---
-ADMIN_USER = os.getenv("ADMIN_USER", "admin")
-ADMIN_PASS = os.getenv("ADMIN_PASS", "admin123")
-
+# --- auth ---
 def login_required(f):
     @wraps(f)
     def wrapper(*args, **kwargs):
         if not session.get("logado"):
-            if request.is_json or request.path.startswith("/api/"):
+            if request.is_json:
                 return jsonify({"error": "Não autorizado"}), 401
             return redirect(url_for("login"))
+        return f(*args, **kwargs)
+    return wrapper
+
+def admin_required(f):
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        if not session.get("logado"):
+            if request.is_json:
+                return jsonify({"error": "Não autorizado"}), 401
+            return redirect(url_for("login"))
+        if not session.get("admin"):
+            return jsonify({"error": "Apenas admin"}), 403
         return f(*args, **kwargs)
     return wrapper
 
@@ -63,6 +72,19 @@ def init_db():
                 created_at TEXT DEFAULT (datetime('now'))
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS usuarios (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                password TEXT NOT NULL,
+                admin INTEGER DEFAULT 0
+            )
+        """)
+        # cria admin padrao se nao existir
+        cur = conn.execute("SELECT id FROM usuarios WHERE username = 'admin'")
+        if not cur.fetchone():
+            conn.execute("INSERT INTO usuarios (username, password, admin) VALUES (?, ?, 1)",
+                         ("admin", "admin123"))
 init_db()
 
 def limpar_antigas():
@@ -173,8 +195,16 @@ Texto:
 def login():
     if request.method == "POST":
         data = request.get_json() or request.form
-        if data.get("user") == ADMIN_USER and data.get("pass") == ADMIN_PASS:
+        user = data.get("user", "")
+        passw = data.get("pass", "")
+        with sqlite3.connect(DB_PATH) as conn:
+            row = conn.execute(
+                "SELECT id, username, password, admin FROM usuarios WHERE username = ?", (user,)
+            ).fetchone()
+        if row and row[2] == passw:
             session["logado"] = True
+            session["admin"] = bool(row[3])
+            session["username"] = row[1]
             if request.is_json:
                 return jsonify({"ok": True})
             return redirect(url_for("index"))
@@ -192,7 +222,7 @@ def logout():
 @app.route("/")
 @login_required
 def index():
-    return render_template("index.html")
+    return render_template("index.html", admin=session.get("admin", False), username=session.get("username", ""))
 
 @app.route("/ping")
 def ping():
@@ -328,6 +358,37 @@ def upload_canhoto(nota_id):
 def admin_limpar():
     qtd = limpar_antigas()
     return jsonify({"message": f"{qtd} nota(s) antiga(s) removida(s)"})
+
+@app.route("/admin/usuarios", methods=["GET"])
+@admin_required
+def listar_usuarios():
+    with sqlite3.connect(DB_PATH) as conn:
+        rows = conn.execute("SELECT id, username, admin FROM usuarios").fetchall()
+    return jsonify([{"id": r[0], "username": r[1], "admin": bool(r[2])} for r in rows])
+
+@app.route("/admin/usuarios", methods=["POST"])
+@admin_required
+def criar_usuario():
+    data = request.get_json()
+    username = data.get("username", "").strip()
+    password = data.get("password", "").strip()
+    is_admin = 1 if data.get("admin") else 0
+    if not username or not password:
+        return jsonify({"error": "Usuário e senha obrigatórios"}), 400
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.execute("INSERT INTO usuarios (username, password, admin) VALUES (?, ?, ?)",
+                         (username, password, is_admin))
+        return jsonify({"message": "Usuário criado!"})
+    except sqlite3.IntegrityError:
+        return jsonify({"error": "Usuário já existe"}), 400
+
+@app.route("/admin/usuarios/<int:uid>", methods=["DELETE"])
+@admin_required
+def deletar_usuario(uid):
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("DELETE FROM usuarios WHERE id = ? AND admin = 0", (uid,))
+    return jsonify({"message": "Usuário removido"})
 
 @app.route("/notas/busca")
 @login_required
