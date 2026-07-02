@@ -131,35 +131,60 @@
       btnUpload.disabled = selectedFiles.length === 0;
     }
 
-    // Acorda o servidor ao carregar a pagina
-    fetch('/notas').catch(() => {});
+    // Acorda o servidor antes de permitir upload
+    let servidorPronto = false;
+    async function acordarServidor() {
+      for (let i = 0; i < 5; i++) {
+        try {
+          const r = await fetch('/notas', { signal: AbortSignal.timeout(15000) });
+          if (r.ok) { servidorPronto = true; return; }
+        } catch(e) {}
+        await new Promise(r => setTimeout(r, 3000));
+      }
+    }
+    acordarServidor();
 
     btnUpload.addEventListener('click', async () => {
       if (!selectedFiles.length) return;
       btnUpload.disabled = true;
-      showStatus('Processando... (pode levar ate 30s no primeiro uso)', 'loading');
+      showStatus('Verificando servidor...', 'loading');
+
+      // acorda se ainda nao estiver pronto
+      if (!servidorPronto) {
+        for (let i = 0; i < 10; i++) {
+          try {
+            const r = await fetch('/notas', { signal: AbortSignal.timeout(15000) });
+            if (r.ok) { servidorPronto = true; break; }
+          } catch(e) {}
+          showStatus('Acordando servidor... (' + (i+1) + '/10)', 'loading');
+          await new Promise(r => setTimeout(r, 3000));
+        }
+      }
+
+      if (!servidorPronto) {
+        showStatus('Servidor indisponivel. Tente recarregar a pagina.', 'error');
+        btnUpload.disabled = false;
+        return;
+      }
+
+      showStatus('Processando...', 'loading');
       const formData = new FormData();
       for (const f of selectedFiles) formData.append('files', f);
-      // tenta ate 3x em caso de cold start
-      for (let attempt = 0; attempt < 3; attempt++) {
-        try {
-          const res = await fetch('/upload', { method: 'POST', body: formData });
-          const data = await res.json();
-          if (!res.ok) { showStatus(data.error || 'Erro', 'error'); return; }
-          showStatus(data.message, data.erros?.length ? 'error' : 'success');
-          currentBatchId = data.batch_id;
-          currentNotas = data.notas.map((n, i) => ({ ...n, id: n.id || `temp_${i}`, status: 'pendente' }));
-          renderNotas(currentNotas);
-          selectedFiles = []; renderFileList();
-          loadHistory();
-          return;
-        } catch (err) {
-          if (attempt < 2) {
-            showStatus('Servidor acordando... tentativa ' + (attempt+2) + '/3', 'loading');
-            await new Promise(r => setTimeout(r, 10000));
-          } else {
-            showStatus('Servidor esta dormindo. Recarregue a pagina e tente novamente, ou instale o UptimeRobot (veja instrucoes).', 'error');
-          }
+      try {
+        const res = await fetch('/upload', { method: 'POST', body: formData, signal: AbortSignal.timeout(120000) });
+        const data = await res.json();
+        if (!res.ok) { showStatus(data.error || 'Erro', 'error'); return; }
+        showStatus(data.message, data.erros?.length ? 'error' : 'success');
+        currentBatchId = data.batch_id;
+        currentNotas = data.notas.map((n, i) => ({ ...n, id: n.id || `temp_${i}`, status: 'pendente' }));
+        renderNotas(currentNotas);
+        selectedFiles = []; renderFileList();
+        loadHistory();
+      } catch (err) {
+        if (err.name === 'TimeoutError') {
+          showStatus('Tempo limite excedido. O PDF pode ser muito grande ou a IA demorou demais.', 'error');
+        } else {
+          showStatus('Erro: ' + err.message, 'error');
         }
       }
       btnUpload.disabled = false;
