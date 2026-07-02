@@ -111,6 +111,7 @@
 
   <script>
     const podeHistorico = {{ 'true' if pode_historico else 'false' }};
+    const isAdmin = {{ 'true' if admin else 'false' }};
     const dropZone = document.getElementById('dropZone');
     const fileInput = document.getElementById('fileInput');
     const fileList = document.getElementById('fileList');
@@ -299,8 +300,10 @@
             : '<span class="tag-pendente">Pendente</span>';
           const links = [];
           if (n.canhoto_url) links.push(`<a href="${n.canhoto_url}" target="_blank" style="font-size:.7rem;">Canhoto</a>`);
+          const acoes = [`<button class="btn btn-secondary btn-sm" onclick="viewNota(${n.id})" style="margin-left:4px;">Ver</button>`];
+          if (isAdmin) acoes.push(`<button class="btn btn-secondary btn-sm" onclick="deletarNota(${n.id})" style="margin-left:4px;color:#991b1b;">Excluir</button>`);
           const tr = document.createElement('tr');
-          tr.innerHTML = `<td>${n.id}</td><td>${n.username || '-'}</td><td>${n.nome_cliente || '-'}</td><td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${n.endereco || '-'}</td><td>${n.numero_nota || '-'}</td><td>${st}</td><td>${n.created_at}</td><td>${links.join(' | ')}<button class="btn btn-secondary btn-sm" onclick="viewNota(${n.id})" style="margin-left:4px;">Ver</button></td>`;
+          tr.innerHTML = `<td>${n.id}</td><td>${n.username || '-'}</td><td>${n.nome_cliente || '-'}</td><td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${n.endereco || '-'}</td><td>${n.numero_nota || '-'}</td><td>${st}</td><td>${n.created_at}</td><td>${links.join(' | ')}${acoes.join('')}</td>`;
           tbody.appendChild(tr);
         });
       } catch(e) {}
@@ -333,6 +336,16 @@
       } catch(e) {}
     }
     carregarMinhasNotas();
+
+    window.deletarNota = async function(id) {
+      if (!confirm('Excluir esta nota permanentemente?')) return;
+      try {
+        const res = await fetch('/admin/nota/' + id, { method: 'DELETE' });
+        const data = await res.json();
+        alert(data.message || data.error);
+        if (res.ok) loadHistory();
+      } catch(e) { alert('Erro: ' + e.message); }
+    };
 
     window.adminPanel = async function() {
       const res = await fetch('/admin/usuarios');

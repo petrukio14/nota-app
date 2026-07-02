@@ -397,6 +397,23 @@ def admin_limpar():
     qtd = limpar_antigas()
     return jsonify({"message": f"{qtd} nota(s) antiga(s) removida(s)"})
 
+@app.route("/admin/nota/<int:nota_id>", methods=["DELETE"])
+@admin_required
+def admin_deletar_nota(nota_id):
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute("SELECT canhoto_url FROM notas WHERE id = ?", (nota_id,)).fetchone()
+        if not row:
+            return jsonify({"error": "Nota não encontrada"}), 404
+        url = row[0]
+        if url:
+            try:
+                public_id = url.split("/")[-1].rsplit(".", 1)[0]
+                cloudinary.uploader.destroy(public_id)
+            except:
+                pass
+        conn.execute("DELETE FROM notas WHERE id = ?", (nota_id,))
+    return jsonify({"message": "Nota removida"})
+
 @app.route("/admin/usuarios", methods=["GET"])
 @admin_required
 def listar_usuarios():
