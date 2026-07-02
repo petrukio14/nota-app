@@ -41,7 +41,6 @@ def init_db():
                 endereco TEXT,
                 numero_nota TEXT,
                 canhoto_url TEXT,
-                pdf_url TEXT,
                 status TEXT DEFAULT 'pendente',
                 raw_response TEXT,
                 created_at TEXT DEFAULT (datetime('now'))
@@ -168,24 +167,20 @@ def upload():
             erros.append({"file": filename, "error": f"Erro IA: {str(e)}"})
             save_path.unlink(missing_ok=True)
             continue
-        try:
-            pdf_url = upload_to_cloudinary(save_path, "notas-pdf")
-        except Exception as e:
-            pdf_url = ""
         save_path.unlink(missing_ok=True)
         for nota in notas:
             dados_json = json.dumps(nota, ensure_ascii=False)
             with sqlite3.connect(DB_PATH) as conn:
                 cur = conn.execute(
                     """INSERT INTO notas
-                       (batch_id, filename, extracted_text, nome_cliente, endereco, numero_nota, pdf_url, raw_response)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                       (batch_id, filename, extracted_text, nome_cliente, endereco, numero_nota, raw_response)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
                     (batch_id, unique_name, raw_text,
                      nota.get("nome_cliente", ""), nota.get("endereco", ""),
-                     nota.get("numero_nota", ""), pdf_url, dados_json),
+                     nota.get("numero_nota", ""), dados_json),
                 )
                 nota_id = cur.lastrowid
-            todas.append({**nota, "id": nota_id, "pdf_url": pdf_url})
+            todas.append({**nota, "id": nota_id})
     return jsonify({
         "message": f"{len(todas)} nota(s) processada(s)",
         "notas": todas,
@@ -197,13 +192,13 @@ def upload():
 def list_notas():
     with sqlite3.connect(DB_PATH) as conn:
         rows = conn.execute(
-            "SELECT id, filename, nome_cliente, endereco, numero_nota, status, batch_id, pdf_url, canhoto_url, created_at FROM notas ORDER BY id DESC"
+            "SELECT id, filename, nome_cliente, endereco, numero_nota, status, batch_id, canhoto_url, created_at FROM notas ORDER BY id DESC"
         ).fetchall()
     return jsonify([
         {"id": r[0], "filename": r[1], "nome_cliente": r[2] or "",
          "endereco": r[3] or "", "numero_nota": r[4] or "",
          "status": r[5] or "pendente", "batch_id": r[6],
-         "pdf_url": r[7] or "", "canhoto_url": r[8] or "", "created_at": r[9]}
+         "canhoto_url": r[7] or "", "created_at": r[8]}
         for r in rows
     ])
 
@@ -223,12 +218,12 @@ def get_nota(nota_id):
 def get_batch(batch_id):
     with sqlite3.connect(DB_PATH) as conn:
         rows = conn.execute(
-            "SELECT id, nome_cliente, endereco, numero_nota, status, pdf_url, canhoto_url FROM notas WHERE batch_id = ? ORDER BY id",
+            "SELECT id, nome_cliente, endereco, numero_nota, status, canhoto_url FROM notas WHERE batch_id = ? ORDER BY id",
             (batch_id,),
         ).fetchall()
     return jsonify([
         {"id": r[0], "nome_cliente": r[1], "endereco": r[2], "numero_nota": r[3],
-         "status": r[4], "pdf_url": r[5] or "", "canhoto_url": r[6] or ""}
+         "status": r[4], "canhoto_url": r[5] or ""}
         for r in rows
     ])
 
