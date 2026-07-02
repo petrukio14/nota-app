@@ -80,10 +80,18 @@ def init_db():
                 admin INTEGER DEFAULT 0
             )
         """)
+        # migracoes: username em notas, pode_historico em usuarios
+        for alter in [
+            "ALTER TABLE notas ADD COLUMN username TEXT",
+            "ALTER TABLE usuarios ADD COLUMN pode_historico INTEGER DEFAULT 0",
+        ]:
+            try: conn.execute(alter)
+            except: pass
+        conn.execute("UPDATE notas SET username = 'admin' WHERE username IS NULL")
         # cria admin padrao se nao existir
         cur = conn.execute("SELECT id FROM usuarios WHERE username = 'admin'")
         if not cur.fetchone():
-            conn.execute("INSERT INTO usuarios (username, password, admin) VALUES (?, ?, 1)",
+            conn.execute("INSERT INTO usuarios (username, password, admin, pode_historico) VALUES (?, ?, 1, 1)",
                          ("admin", "admin123"))
         # atualiza senha do admin via env var se definida
         env_pass = os.getenv("ADMIN_PASS")
@@ -202,11 +210,12 @@ def login():
         passw = request.form.get("pass", "")
         with sqlite3.connect(DB_PATH) as conn:
             row = conn.execute(
-                "SELECT id, username, password, admin FROM usuarios WHERE username = ?", (user,)
+                "SELECT id, username, password, admin, pode_historico FROM usuarios WHERE username = ?", (user,)
             ).fetchone()
         if row and row[2] == passw:
             session["logado"] = True
             session["admin"] = bool(row[3])
+            session["pode_historico"] = bool(row[4]) if len(row) > 4 else False
             session["username"] = row[1]
             return redirect(url_for("index"))
         return render_template("login.html", erro="Usuário ou senha inválidos")
@@ -221,7 +230,12 @@ def logout():
 @app.route("/")
 @login_required
 def index():
-    return render_template("index.html", admin=session.get("admin", False), username=session.get("username", ""))
+    pode_historico = session.get("admin") or session.get("pode_historico")
+    if not pode_historico:
+        with sqlite3.connect(DB_PATH) as conn:
+            row = conn.execute("SELECT pode_historico FROM usuarios WHERE username = ?", (session["username"],)).fetchone()
+            pode_historico = row and row[0]
+    return render_template("index.html", admin=session.get("admin", False), username=session.get("username", ""), pode_historico=pode_historico)
 
 @app.route("/ping")
 def ping():
@@ -274,11 +288,11 @@ def upload():
             with sqlite3.connect(DB_PATH) as conn:
                 cur = conn.execute(
                     """INSERT INTO notas
-                       (batch_id, filename, extracted_text, nome_cliente, endereco, numero_nota, raw_response)
-                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                       (batch_id, filename, extracted_text, nome_cliente, endereco, numero_nota, raw_response, username)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                     (batch_id, unique_name, raw_text,
                      nota.get("nome_cliente", ""), nota.get("endereco", ""),
-                     nf_num, dados_json),
+                     nf_num, dados_json, session["username"]),
                 )
                 nota_id = cur.lastrowid
             todas.append({**nota, "id": nota_id})
@@ -292,7 +306,8 @@ def upload():
 def list_notas():
     with sqlite3.connect(DB_PATH) as conn:
         rows = conn.execute(
-            "SELECT id, filename, nome_cliente, endereco, numero_nota, status, batch_id, canhoto_url, created_at FROM notas ORDER BY id DESC"
+            "SELECT id, filename, nome_cliente, endereco, numero_nota, status, batch_id, canhoto_url, created_at FROM notas WHERE username = ? ORDER BY id DESC",
+            (session["username"],)
         ).fetchall()
     return jsonify([
         {"id": r[0], "filename": r[1], "nome_cliente": r[2] or "",
@@ -315,6 +330,24 @@ def get_nota(nota_id):
         d["raw_response"] = json.loads(d["raw_response"])
     return jsonify(d)
 
+@app.route("/historico")
+@login_required
+def historico():
+    pode = session.get("admin") or session.get("pode_historico")
+    if not pode:
+        return jsonify({"error": "Acesso negado"}), 403
+    with sqlite3.connect(DB_PATH) as conn:
+        rows = conn.execute(
+            "SELECT id, filename, nome_cliente, endereco, numero_nota, status, batch_id, canhoto_url, created_at, username FROM notas ORDER BY id DESC"
+        ).fetchall()
+    return jsonify([
+        {"id": r[0], "filename": r[1], "nome_cliente": r[2] or "",
+         "endereco": r[3] or "", "numero_nota": r[4] or "",
+         "status": r[5] or "pendente", "batch_id": r[6],
+         "canhoto_url": r[7] or "", "created_at": r[8], "username": r[9] or ""}
+        for r in rows
+    ])
+
 @app.route("/batch/<batch_id>")
 @login_required
 def get_batch(batch_id):
@@ -332,6 +365,12 @@ def get_batch(batch_id):
 @app.route("/upload-canhoto/<int:nota_id>", methods=["POST"])
 @login_required
 def upload_canhoto(nota_id):
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute("SELECT username FROM notas WHERE id = ?", (nota_id,)).fetchone()
+    if not row:
+        return jsonify({"error": "Nota não encontrada"}), 404
+    if row[0] != session["username"] and not session.get("admin"):
+        return jsonify({"error": "Nota não pertence a você"}), 403
     if "file" not in request.files:
         return jsonify({"error": "Nenhum arquivo"}), 400
     file = request.files["file"]
@@ -362,8 +401,8 @@ def admin_limpar():
 @admin_required
 def listar_usuarios():
     with sqlite3.connect(DB_PATH) as conn:
-        rows = conn.execute("SELECT id, username, admin FROM usuarios").fetchall()
-    return jsonify([{"id": r[0], "username": r[1], "admin": bool(r[2])} for r in rows])
+        rows = conn.execute("SELECT id, username, admin, pode_historico FROM usuarios").fetchall()
+    return jsonify([{"id": r[0], "username": r[1], "admin": bool(r[2]), "pode_historico": bool(r[3])} for r in rows])
 
 @app.route("/admin/usuarios", methods=["POST"])
 @admin_required
@@ -372,12 +411,13 @@ def criar_usuario():
     username = data.get("username", "").strip()
     password = data.get("password", "").strip()
     is_admin = 1 if data.get("admin") else 0
+    pode_historico = 1 if data.get("pode_historico") else 0
     if not username or not password:
         return jsonify({"error": "Usuário e senha obrigatórios"}), 400
     try:
         with sqlite3.connect(DB_PATH) as conn:
-            conn.execute("INSERT INTO usuarios (username, password, admin) VALUES (?, ?, ?)",
-                         (username, password, is_admin))
+            conn.execute("INSERT INTO usuarios (username, password, admin, pode_historico) VALUES (?, ?, ?, ?)",
+                         (username, password, is_admin, pode_historico))
         return jsonify({"message": "Usuário criado!"})
     except sqlite3.IntegrityError:
         return jsonify({"error": "Usuário já existe"}), 400
@@ -393,16 +433,30 @@ def deletar_usuario(uid):
 @login_required
 def busca_notas():
     q = request.args.get("q", "").strip()
+    user = session["username"]
+    pode = session.get("admin") or session.get("pode_historico")
     with sqlite3.connect(DB_PATH) as conn:
-        if q:
-            rows = conn.execute(
-                "SELECT id, filename, nome_cliente, endereco, numero_nota, status, canhoto_url, created_at FROM notas WHERE numero_nota LIKE ? ORDER BY id DESC",
-                (f"%{q}%",),
-            ).fetchall()
+        if pode:
+            if q:
+                rows = conn.execute(
+                    "SELECT id, filename, nome_cliente, endereco, numero_nota, status, canhoto_url, created_at FROM notas WHERE numero_nota LIKE ? ORDER BY id DESC",
+                    (f"%{q}%",),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT id, filename, nome_cliente, endereco, numero_nota, status, canhoto_url, created_at FROM notas ORDER BY id DESC"
+                ).fetchall()
         else:
-            rows = conn.execute(
-                "SELECT id, filename, nome_cliente, endereco, numero_nota, status, canhoto_url, created_at FROM notas ORDER BY id DESC"
-            ).fetchall()
+            if q:
+                rows = conn.execute(
+                    "SELECT id, filename, nome_cliente, endereco, numero_nota, status, canhoto_url, created_at FROM notas WHERE username = ? AND numero_nota LIKE ? ORDER BY id DESC",
+                    (user, f"%{q}%"),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT id, filename, nome_cliente, endereco, numero_nota, status, canhoto_url, created_at FROM notas WHERE username = ? ORDER BY id DESC",
+                    (user,),
+                ).fetchall()
     return jsonify([
         {"id": r[0], "filename": r[1], "nome_cliente": r[2] or "",
          "endereco": r[3] or "", "numero_nota": r[4] or "",

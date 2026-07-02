@@ -35,6 +35,7 @@
     .tab-bar { display: flex; gap: 4px; margin-bottom: 16px; }
     .tab-bar button { padding: 8px 16px; border: 1px solid #e5e7eb; background: #fff; border-radius: 6px; cursor: pointer; font-size: .85rem; }
     .tab-bar button.active { background: #2563eb; color: #fff; border-color: #2563eb; }
+    .tab-bar button:disabled { opacity: .4; cursor: not-allowed; }
     .empty { text-align: center; color: #999; padding: 32px; }
     .file-list { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 6px; }
     .file-tag { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: 4px; font-size: .8rem; background: #e5e7eb; }
@@ -43,6 +44,7 @@
       display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start;
     }
     .nota-card.info { border-left: 4px solid #2563eb; }
+    .nota-card.entregue { border-left: 4px solid #16a34a; }
     .nota-card .route-num {
       background: #2563eb; color: #fff; border-radius: 50%; width: 32px; height: 32px;
       display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: .85rem; flex-shrink: 0;
@@ -82,15 +84,15 @@
 
     <div class="card">
       <div class="tab-bar">
-        <button class="active" data-tab="detail">&#128269; Resultado</button>
-        <button data-tab="list">&#128203; Histórico</button>
+        <button class="active" data-tab="detail">&#128269; Pendentes</button>
+        <button data-tab="list" id="btnHistorico" {% if not pode_historico %}disabled{% endif %}>&#128203; Histórico</button>
       </div>
 
       <div id="tabDetail">
         <div id="resultArea" class="hidden">
           <div id="notasContainer"></div>
         </div>
-        <div id="emptyDetail" class="empty">Nenhuma nota processada ainda.</div>
+        <div id="emptyDetail" class="empty">Nenhuma nota pendente.</div>
       </div>
 
       <div id="tabList" class="hidden">
@@ -99,7 +101,7 @@
           <button class="btn btn-secondary btn-sm" onclick="loadHistory()">Buscar</button>
         </div>
         <table>
-          <thead><tr><th>ID</th><th>Cliente</th><th>Endereço</th><th>Nº Nota</th><th>Status</th><th>Data</th><th></th></tr></thead>
+          <thead><tr><th>ID</th><th>Usuário</th><th>Cliente</th><th>Endereço</th><th>Nº Nota</th><th>Status</th><th>Data</th><th></th></tr></thead>
           <tbody id="historyBody"></tbody>
         </table>
         <div id="emptyHistory" class="empty">Nenhuma nota no histórico.</div>
@@ -108,6 +110,7 @@
   </div>
 
   <script>
+    const podeHistorico = {{ 'true' if pode_historico else 'false' }};
     const dropZone = document.getElementById('dropZone');
     const fileInput = document.getElementById('fileInput');
     const fileList = document.getElementById('fileList');
@@ -116,10 +119,12 @@
     const resultArea = document.getElementById('resultArea');
     const emptyDetail = document.getElementById('emptyDetail');
     const notasContainer = document.getElementById('notasContainer');
+    const btnHistorico = document.getElementById('btnHistorico');
 
     let selectedFiles = [];
-    let currentNotas = [];
+    let userNotas = [];
     let currentBatchId = null;
+    let currentNotas = [];
 
     dropZone.addEventListener('click', () => fileInput.click());
     dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
@@ -141,13 +146,11 @@
       btnUpload.disabled = selectedFiles.length === 0;
     }
 
-    // Acorda o servidor antes de permitir upload
-    let servidorPronto = false;
     async function acordarServidor() {
       for (let i = 0; i < 5; i++) {
         try {
           const r = await fetch('/notas', { signal: AbortSignal.timeout(15000) });
-          if (r.ok) { servidorPronto = true; return; }
+          if (r.ok) return;
         } catch(e) {}
         await new Promise(r => setTimeout(r, 3000));
       }
@@ -157,26 +160,6 @@
     btnUpload.addEventListener('click', async () => {
       if (!selectedFiles.length) return;
       btnUpload.disabled = true;
-      showStatus('Verificando servidor...', 'loading');
-
-      // acorda se ainda nao estiver pronto
-      if (!servidorPronto) {
-        for (let i = 0; i < 10; i++) {
-          try {
-            const r = await fetch('/notas', { signal: AbortSignal.timeout(15000) });
-            if (r.ok) { servidorPronto = true; break; }
-          } catch(e) {}
-          showStatus('Acordando servidor... (' + (i+1) + '/10)', 'loading');
-          await new Promise(r => setTimeout(r, 3000));
-        }
-      }
-
-      if (!servidorPronto) {
-        showStatus('Servidor indisponivel. Tente recarregar a pagina.', 'error');
-        btnUpload.disabled = false;
-        return;
-      }
-
       showStatus('Processando...', 'loading');
       const formData = new FormData();
       for (const f of selectedFiles) formData.append('files', f);
@@ -186,10 +169,11 @@
         if (!res.ok) { showStatus(data.error || 'Erro', 'error'); return; }
         showStatus(data.message, data.erros?.length ? 'error' : 'success');
         currentBatchId = data.batch_id;
-        currentNotas = data.notas.map((n, i) => ({ ...n, id: n.id || `temp_${i}`, status: 'pendente' }));
-        renderNotas(currentNotas);
+        const novas = data.notas.map((n, i) => ({ ...n, id: n.id || `temp_${i}`, status: 'pendente' }));
+        currentNotas = [...currentNotas, ...novas];
+        userNotas = [...userNotas, ...novas];
+        renderNotas(getPendentes());
         selectedFiles = []; renderFileList();
-        loadHistory();
       } catch (err) {
         if (err.name === 'TimeoutError') {
           showStatus('Tempo limite excedido. O PDF pode ser muito grande ou a IA demorou demais.', 'error');
@@ -200,18 +184,34 @@
       btnUpload.disabled = false;
     });
 
+    function getPendentes() {
+      return userNotas.filter(n => n.status === 'pendente');
+    }
+
     function renderNotas(notas) {
+      if (!notas.length) {
+        resultArea.classList.add('hidden');
+        emptyDetail.classList.remove('hidden');
+        emptyDetail.textContent = 'Nenhuma nota pendente.';
+        if (userNotas.length > 0) {
+          emptyDetail.textContent = 'Todas as notas foram entregues!';
+        }
+        notasContainer.innerHTML = '';
+        return;
+      }
       resultArea.classList.remove('hidden');
       emptyDetail.classList.add('hidden');
-      if (!notas.length) { notasContainer.innerHTML = '<p class="empty">Nenhuma nota.</p>'; return; }
-      let html = `<p style="font-size:.85rem;color:#666;margin-bottom:12px;">${notas.length} nota(s) encontrada(s)</p>`;
-      notas.forEach((n, i) => {
+      let html = `<p style="font-size:.85rem;color:#666;margin-bottom:12px;">${notas.length} nota(s) pendente(s) — adicione o canhoto de entrega</p>`;
+      let idx = 0;
+      notas.forEach(n => {
+        const index = userNotas.findIndex(u => u.id === n.id);
         const statusClass = n.status === 'entregue' ? 'tag-entregue' : 'tag-pendente';
         const statusLabel = n.status === 'entregue' ? 'Entregue' : 'Pendente';
         const canhotoLink = n.canhoto_url ? `<a href="${n.canhoto_url}" target="_blank" style="font-size:.75rem;">&#128247; Ver Canhoto</a>` : '';
+        const cardClass = n.status === 'entregue' ? 'nota-card entregue' : 'nota-card info';
         html += `
-          <div class="nota-card info" data-index="${i}">
-            <div class="route-num">${i + 1}</div>
+          <div class="${cardClass}" data-index="${index}">
+            <div class="route-num">${++idx}</div>
             <div class="body">
               <div class="field"><label>Cliente:</label> <span class="value">${n.nome_cliente || '-'}</span></div>
               <div class="field"><label>Endereço:</label> <span class="value">${n.endereco || '-'}</span></div>
@@ -221,15 +221,22 @@
                 ${canhotoLink ? ' | ' + canhotoLink : ''}
               </div>
             </div>
+            ${n.status === 'pendente' ? `
             <div class="actions">
               <label class="btn btn-secondary btn-sm btn-block" style="cursor:pointer;text-align:center;">
                 &#128247; Foto Canhoto
-                <input type="file" accept="image/png,image/jpg,image/jpeg" style="display:none" onchange="uploadCanhoto(${n.id || 0}, this, ${i})">
+                <input type="file" accept="image/png,image/jpg,image/jpeg" style="display:none" onchange="uploadCanhoto(${typeof n.id === 'number' ? n.id : 0}, this, ${index})">
               </label>
-            </div>
+            </div>` : ''}
           </div>`;
       });
       notasContainer.innerHTML = html;
+      atualizarBotoes();
+    }
+
+    function atualizarBotoes() {
+      const pendentes = getPendentes().length;
+      btnHistorico.disabled = pendentes > 0 || !podeHistorico;
     }
 
     window.uploadCanhoto = async function(notaId, input, index) {
@@ -241,9 +248,15 @@
         const res = await fetch(`/upload-canhoto/${notaId}`, { method: 'POST', body: formData });
         const data = await res.json();
         if (!res.ok) { alert('Erro: ' + data.error); return; }
-        currentNotas[index].status = 'entregue';
-        currentNotas[index].canhoto_url = data.canhoto_url;
-        renderNotas(currentNotas);
+        if (userNotas[index]) {
+          userNotas[index].status = 'entregue';
+          userNotas[index].canhoto_url = data.canhoto_url;
+        }
+        renderNotas(getPendentes());
+        // se todas entregues, avisa
+        if (getPendentes().length === 0 && podeHistorico) {
+          showStatus('Todas as notas foram entregues! Acesse o Histórico.', 'success');
+        }
       } catch(e) { alert('Erro: ' + e.message); }
     };
 
@@ -255,6 +268,7 @@
 
     document.querySelectorAll('.tab-bar button').forEach(btn => {
       btn.addEventListener('click', () => {
+        if (btn.disabled) return;
         document.querySelectorAll('.tab-bar button').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         switchTab(btn.dataset.tab);
@@ -264,13 +278,15 @@
     function switchTab(tab) {
       document.getElementById('tabDetail').classList.toggle('hidden', tab !== 'detail');
       document.getElementById('tabList').classList.toggle('hidden', tab !== 'list');
+      if (tab === 'list') loadHistory();
     }
 
     async function loadHistory() {
       try {
         const q = document.getElementById('searchNF').value.trim();
-        const url = q ? `/notas/busca?q=${encodeURIComponent(q)}` : '/notas';
+        const url = q ? `/notas/busca?q=${encodeURIComponent(q)}` : '/historico';
         const res = await fetch(url);
+        if (res.status === 403) { return; }
         const list = await res.json();
         const tbody = document.getElementById('historyBody');
         const empty = document.getElementById('emptyHistory');
@@ -284,7 +300,7 @@
           const links = [];
           if (n.canhoto_url) links.push(`<a href="${n.canhoto_url}" target="_blank" style="font-size:.7rem;">Canhoto</a>`);
           const tr = document.createElement('tr');
-          tr.innerHTML = `<td>${n.id}</td><td>${n.nome_cliente || '-'}</td><td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${n.endereco || '-'}</td><td>${n.numero_nota || '-'}</td><td>${st}</td><td>${n.created_at}</td><td>${links.join(' | ')}<button class="btn btn-secondary btn-sm" onclick="viewNota(${n.id})" style="margin-left:4px;">Ver</button></td>`;
+          tr.innerHTML = `<td>${n.id}</td><td>${n.username || '-'}</td><td>${n.nome_cliente || '-'}</td><td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${n.endereco || '-'}</td><td>${n.numero_nota || '-'}</td><td>${st}</td><td>${n.created_at}</td><td>${links.join(' | ')}<button class="btn btn-secondary btn-sm" onclick="viewNota(${n.id})" style="margin-left:4px;">Ver</button></td>`;
           tbody.appendChild(tr);
         });
       } catch(e) {}
@@ -296,24 +312,39 @@
       try {
         const res = await fetch('/notas/' + id);
         const data = await res.json();
-        currentNotas = [data];
-        renderNotas(currentNotas);
+        // adiciona/atualiza na lista do usuario se pertencer a ele
+        const idx = userNotas.findIndex(n => n.id === id);
+        if (idx >= 0) {
+          userNotas[idx] = { ...userNotas[idx], ...data };
+        } else if (data.username === '{{ username }}') {
+          userNotas.push(data);
+        }
+        renderNotas(getPendentes());
         switchTab('detail');
       } catch(e) {}
     };
 
-    loadHistory();
+    async function carregarMinhasNotas() {
+      try {
+        const res = await fetch('/notas');
+        const list = await res.json();
+        userNotas = list;
+        renderNotas(getPendentes());
+      } catch(e) {}
+    }
+    carregarMinhasNotas();
 
     window.adminPanel = async function() {
       const res = await fetch('/admin/usuarios');
       const usuarios = await res.json();
       let html = '<h3 style="margin-bottom:12px;">Gerenciar Usuários</h3>';
-      html += '<table style="font-size:.85rem;margin-bottom:16px;"><thead><tr><th>ID</th><th>Usuário</th><th>Admin</th><th></th></tr></thead><tbody>';
+      html += '<table style="font-size:.85rem;margin-bottom:16px;"><thead><tr><th>ID</th><th>Usuário</th><th>Admin</th><th>Ver Histórico</th><th></th></tr></thead><tbody>';
       usuarios.forEach(u => {
-        html += `<tr><td>${u.id}</td><td>${u.username}</td><td>${u.admin ? 'Sim' : 'Não'}</td><td>${u.admin ? '' : '<button class="btn btn-secondary btn-sm" onclick="deletarUsuario('+u.id+')">Remover</button>'}</td></tr>`;
+        const hist = u.pode_historico ? 'Sim' : 'Não';
+        html += `<tr><td>${u.id}</td><td>${u.username}</td><td>${u.admin ? 'Sim' : 'Não'}</td><td>${hist}</td><td>${u.admin ? '' : '<button class="btn btn-secondary btn-sm" onclick="deletarUsuario('+u.id+')">Remover</button>'}</td></tr>`;
       });
       html += '</tbody></table>';
-      html += '<div style="display:flex;gap:8px;flex-wrap:wrap;"><input type="text" id="novoUser" placeholder="Usuário" style="flex:1;padding:8px;border:1px solid #e5e7eb;border-radius:6px;"><input type="password" id="novaSenha" placeholder="Senha" style="flex:1;padding:8px;border:1px solid #e5e7eb;border-radius:6px;"><button class="btn btn-primary btn-sm" onclick="criarUsuario()">Criar</button></div>';
+      html += '<div style="display:flex;gap:8px;flex-wrap:wrap;"><input type="text" id="novoUser" placeholder="Usuário" style="padding:8px;border:1px solid #e5e7eb;border-radius:6px;"><input type="password" id="novaSenha" placeholder="Senha" style="padding:8px;border:1px solid #e5e7eb;border-radius:6px;"><label style="display:flex;align-items:center;gap:4px;font-size:.85rem;"><input type="checkbox" id="novoPodeHistorico"> Ver Histórico</label><button class="btn btn-primary btn-sm" onclick="criarUsuario()">Criar</button></div>';
       mostrarModal(html);
     };
 
@@ -332,11 +363,12 @@
     window.criarUsuario = async function() {
       const username = document.getElementById('novoUser').value.trim();
       const password = document.getElementById('novaSenha').value.trim();
+      const podeHistorico = document.getElementById('novoPodeHistorico').checked;
       if (!username || !password) { alert('Preencha usuário e senha'); return; }
       const res = await fetch('/admin/usuarios', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({username, password}),
+        body: JSON.stringify({username, password, pode_historico: podeHistorico}),
       });
       const data = await res.json();
       alert(data.message || data.error);
