@@ -198,9 +198,8 @@ Texto:
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
-        data = request.get_json() or request.form
-        user = data.get("user", "")
-        passw = data.get("pass", "")
+        user = request.form.get("user", "")
+        passw = request.form.get("pass", "")
         with sqlite3.connect(DB_PATH) as conn:
             row = conn.execute(
                 "SELECT id, username, password, admin FROM usuarios WHERE username = ?", (user,)
@@ -209,11 +208,7 @@ def login():
             session["logado"] = True
             session["admin"] = bool(row[3])
             session["username"] = row[1]
-            if request.is_json:
-                return jsonify({"ok": True})
             return redirect(url_for("index"))
-        if request.is_json:
-            return jsonify({"error": "Usuário ou senha inválidos"}), 401
         return render_template("login.html", erro="Usuário ou senha inválidos")
     return render_template("login.html")
 
