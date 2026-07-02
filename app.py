@@ -235,4 +235,5 @@ def not_found(e):
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
+    print(f"Servidor iniciando na porta {port}")
     app.run(debug=False, host="0.0.0.0", port=port)
