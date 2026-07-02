@@ -88,6 +88,10 @@
       </div>
 
       <div id="tabList" class="hidden">
+        <div style="margin-bottom:12px;display:flex;gap:8px;">
+          <input type="text" id="searchNF" placeholder="Buscar por nº da NF..." style="flex:1;padding:8px 12px;border:1px solid #e5e7eb;border-radius:6px;font-size:.85rem;">
+          <button class="btn btn-secondary btn-sm" onclick="loadHistory()">Buscar</button>
+        </div>
         <table>
           <thead><tr><th>ID</th><th>Cliente</th><th>Endereço</th><th>Nº Nota</th><th>Status</th><th>Data</th><th></th></tr></thead>
           <tbody id="historyBody"></tbody>
@@ -258,7 +262,9 @@
 
     async function loadHistory() {
       try {
-        const res = await fetch('/notas');
+        const q = document.getElementById('searchNF').value.trim();
+        const url = q ? `/notas/busca?q=${encodeURIComponent(q)}` : '/notas';
+        const res = await fetch(url);
         const list = await res.json();
         const tbody = document.getElementById('historyBody');
         const empty = document.getElementById('emptyHistory');
@@ -277,6 +283,8 @@
         });
       } catch(e) {}
     }
+
+    document.getElementById('searchNF').addEventListener('keydown', e => { if (e.key === 'Enter') loadHistory(); });
 
     window.viewNota = async function(id) {
       try {

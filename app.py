@@ -2,7 +2,7 @@ import os
 import sys
 import sqlite3
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from traceback import format_exc
 
@@ -47,6 +47,26 @@ def init_db():
             )
         """)
 init_db()
+
+def limpar_antigas():
+    from datetime import timedelta
+    limite = datetime.now() - timedelta(days=365)
+    with sqlite3.connect(DB_PATH) as conn:
+        rows = conn.execute(
+            "SELECT id, canhoto_url FROM notas WHERE created_at < ?", (limite.strftime("%Y-%m-%d %H:%M:%S"),)
+        ).fetchall()
+        for row in rows:
+            nota_id, url = row
+            if url:
+                try:
+                    public_id = url.split("/")[-1].rsplit(".", 1)[0]
+                    cloudinary.uploader.destroy(public_id)
+                except:
+                    pass
+            conn.execute("DELETE FROM notas WHERE id = ?", (nota_id,))
+    return len(rows)
+
+limpar_antigas()
 
 def allowed_file(name, exts=ALLOWED_EXTENSIONS):
     return "." in name and name.rsplit(".", 1)[1].lower() in exts
@@ -248,6 +268,31 @@ def upload_canhoto(nota_id):
         conn.execute("UPDATE notas SET canhoto_url = ?, status = 'entregue' WHERE id = ?",
                      (url, nota_id))
     return jsonify({"message": "Canhoto salvo na nuvem!", "canhoto_url": url})
+
+@app.route("/admin/limpar", methods=["POST"])
+def admin_limpar():
+    qtd = limpar_antigas()
+    return jsonify({"message": f"{qtd} nota(s) antiga(s) removida(s)"})
+
+@app.route("/notas/busca")
+def busca_notas():
+    q = request.args.get("q", "").strip()
+    with sqlite3.connect(DB_PATH) as conn:
+        if q:
+            rows = conn.execute(
+                "SELECT id, filename, nome_cliente, endereco, numero_nota, status, canhoto_url, created_at FROM notas WHERE numero_nota LIKE ? ORDER BY id DESC",
+                (f"%{q}%",),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id, filename, nome_cliente, endereco, numero_nota, status, canhoto_url, created_at FROM notas ORDER BY id DESC"
+            ).fetchall()
+    return jsonify([
+        {"id": r[0], "filename": r[1], "nome_cliente": r[2] or "",
+         "endereco": r[3] or "", "numero_nota": r[4] or "",
+         "status": r[5] or "pendente", "canhoto_url": r[6] or "", "created_at": r[7]}
+        for r in rows
+    ])
 
 @app.errorhandler(Exception)
 def handle_error(e):
