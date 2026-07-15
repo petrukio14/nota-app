@@ -414,6 +414,21 @@ def admin_deletar_nota(nota_id):
         conn.execute("DELETE FROM notas WHERE id = ?", (nota_id,))
     return jsonify({"message": "Nota removida"})
 
+@app.route("/admin/exportar")
+@admin_required
+def admin_exportar():
+    import io
+    with open(DB_PATH, "rb") as f:
+        data = f.read()
+    return (
+        data,
+        200,
+        {
+            "Content-Type": "application/octet-stream",
+            "Content-Disposition": f"attachment; filename=notas.db",
+        },
+    )
+
 @app.route("/admin/usuarios", methods=["GET"])
 @admin_required
 def listar_usuarios():
