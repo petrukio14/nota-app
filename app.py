@@ -202,11 +202,8 @@ def extract_text(filepath):
         return extract_text_pdf_pages(filepath)
     return extract_text_image(filepath)
 
-def extract_with_ai(raw_text, api_key=None, base_url=None, model=None, source="primary"):
+def extract_with_ai(raw_text, api_key, base_url, model, source="unknown"):
     from openai import OpenAI
-    api_key = api_key or os.getenv("OPENAI_API_KEY") or os.getenv("OPENROUTER_API_KEY")
-    base_url = base_url or os.getenv("OPENAI_BASE_URL", "https://openrouter.ai/api/v1")
-    model = model or os.getenv("AI_MODEL", "openai/gpt-4o-mini")
     client = OpenAI(api_key=api_key, base_url=base_url)
     prompt = f"""O texto abaixo pode conter UMA OU MAIS notas fiscais.
 Extraia TODAS as notas fiscais encontradas. Para cada uma, extraia:
@@ -313,26 +310,62 @@ def upload():
         text_path = TEXTS_DIR / f"{unique_name}.txt"
         text_path.write_text(raw_text, encoding="utf-8")
         try:
-            notas = extract_with_ai(raw_text, source="primary")
+            notas = extract_with_ai(
+                raw_text,
+                api_key=os.getenv("NVIDIA_API_KEY"),
+                base_url=os.getenv("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1"),
+                model=os.getenv("NVIDIA_MODEL", "nvidia/llama-3.1-nemotron-nano-8b-v1"),
+                source="nvidia",
+            )
         except Exception as e:
-            gemini_key = os.getenv("GOOGLE_GEMINI_API_KEY")
-            if gemini_key:
+            or_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY")
+            if or_key:
                 try:
                     notas = extract_with_ai(
                         raw_text,
-                        api_key=gemini_key,
-                        base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-                        model=os.getenv("AI_FALLBACK_MODEL", "gemini-2.0-flash"),
-                        source="fallback",
+                        api_key=or_key,
+                        base_url=os.getenv("OPENAI_BASE_URL", "https://openrouter.ai/api/v1"),
+                        model=os.getenv("AI_MODEL", "openai/gpt-4o-mini"),
+                        source="openrouter",
                     )
                 except Exception as e2:
-                    erros.append({"file": filename, "error": f"Erro IA primaria: {e} / fallback Gemini: {e2}"})
+                    gemini_key = os.getenv("GOOGLE_GEMINI_API_KEY")
+                    if gemini_key:
+                        try:
+                            notas = extract_with_ai(
+                                raw_text,
+                                api_key=gemini_key,
+                                base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+                                model=os.getenv("AI_FALLBACK_MODEL", "gemini-2.0-flash"),
+                                source="gemini",
+                            )
+                        except Exception as e3:
+                            erros.append({"file": filename, "error": f"Erro NAS 3 IAs: NVIDIA={e} / OpenRouter={e2} / Gemini={e3}"})
+                            save_path.unlink(missing_ok=True)
+                            continue
+                    else:
+                        erros.append({"file": filename, "error": f"Erro NVIDIA: {e} / OpenRouter: {e2}"})
+                        save_path.unlink(missing_ok=True)
+                        continue
+            else:
+                gemini_key = os.getenv("GOOGLE_GEMINI_API_KEY")
+                if gemini_key:
+                    try:
+                        notas = extract_with_ai(
+                            raw_text,
+                            api_key=gemini_key,
+                            base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+                            model=os.getenv("AI_FALLBACK_MODEL", "gemini-2.0-flash"),
+                            source="gemini",
+                        )
+                    except Exception as e3:
+                        erros.append({"file": filename, "error": f"Erro NVIDIA: {e} / Gemini: {e3}"})
+                        save_path.unlink(missing_ok=True)
+                        continue
+                else:
+                    erros.append({"file": filename, "error": f"Erro NVIDIA: {str(e)}"})
                     save_path.unlink(missing_ok=True)
                     continue
-            else:
-                erros.append({"file": filename, "error": f"Erro IA: {str(e)}"})
-                save_path.unlink(missing_ok=True)
-                continue
         save_path.unlink(missing_ok=True)
         for nota in notas:
             nf_num = nota.get("numero_nota", "").strip()
