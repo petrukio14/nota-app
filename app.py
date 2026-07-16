@@ -143,23 +143,63 @@ def extract_text_pdf(path):
     return "\n".join(text_parts)
 
 def extract_text_image(path):
-    try:
-        from google.cloud import vision
-    except ImportError:
-        raise Exception("OCR para fotos nao disponivel. Instale google-cloud-vision ou use PDF.")
-    client = vision.ImageAnnotatorClient()
+    gemini_key = os.getenv("GOOGLE_GEMINI_API_KEY")
+    if not gemini_key:
+        raise Exception("Sem OCR disponivel. Configure GOOGLE_GEMINI_API_KEY para processar fotos.")
+    import base64
+    from openai import OpenAI
     with open(path, "rb") as f:
-        content = f.read()
-    image = vision.Image(content=content)
-    response = client.text_detection(image=image)
-    if response.error.message:
-        raise Exception(f"Vision API error: {response.error.message}")
-    return response.full_text_annotation.text
+        b64 = base64.b64encode(f.read()).decode()
+    mime = "image/png" if path.lower().endswith(".png") else "image/jpeg"
+    client = OpenAI(api_key=gemini_key, base_url="https://generativelanguage.googleapis.com/v1beta/openai/")
+    resp = client.chat.completions.create(
+        model="gemini-2.0-flash",
+        messages=[{"role": "user", "content": [
+            {"type": "text", "text": "Extraia todo o texto visivel nesta imagem. Responda apenas com o texto extraido, sem comentarios."},
+            {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
+        ]}],
+        temperature=0.1,
+    )
+    return resp.choices[0].message.content.strip()
+
+def extract_text_pdf_pages(path):
+    """Converte PDF para imagens e extrai texto via Gemini OCR."""
+    import pypdfium2 as pdfium
+    from PIL import Image
+    import io, base64, tempfile
+    gemini_key = os.getenv("GOOGLE_GEMINI_API_KEY")
+    if not gemini_key:
+        return ""
+    from openai import OpenAI
+    client = OpenAI(api_key=gemini_key, base_url="https://generativelanguage.googleapis.com/v1beta/openai/")
+    pdf = pdfium.PdfDocument(path)
+    texts = []
+    for i in range(len(pdf)):
+        page = pdf[i]
+        bitmap = page.render(scale=2)
+        pil = bitmap.to_pil()
+        buf = io.BytesIO()
+        pil.save(buf, format="PNG")
+        b64 = base64.b64encode(buf.getvalue()).decode()
+        resp = client.chat.completions.create(
+            model="gemini-2.0-flash",
+            messages=[{"role": "user", "content": [
+                {"type": "text", "text": "Extraia todo o texto visivel nesta imagem de nota fiscal. Responda apenas com o texto extraido."},
+                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+            ]}],
+            temperature=0.1,
+        )
+        texts.append(resp.choices[0].message.content.strip())
+    pdf.close()
+    return "\n\n".join(texts)
 
 def extract_text(filepath):
     ext = Path(filepath).suffix.lower()
     if ext == ".pdf":
-        return extract_text_pdf(filepath)
+        text = extract_text_pdf(filepath)
+        if text.strip():
+            return text
+        return extract_text_pdf_pages(filepath)
     return extract_text_image(filepath)
 
 def extract_with_ai(raw_text, api_key=None, base_url=None, model=None, source="primary"):
