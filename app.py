@@ -162,7 +162,7 @@ def extract_text(filepath):
         return extract_text_pdf(filepath)
     return extract_text_image(filepath)
 
-def extract_with_ai(raw_text, api_key=None, base_url=None, model=None):
+def extract_with_ai(raw_text, api_key=None, base_url=None, model=None, source="primary"):
     from openai import OpenAI
     api_key = api_key or os.getenv("OPENAI_API_KEY") or os.getenv("OPENROUTER_API_KEY")
     base_url = base_url or os.getenv("OPENAI_BASE_URL", "https://openrouter.ai/api/v1")
@@ -190,6 +190,7 @@ Texto:
         messages=[{"role": "user", "content": prompt}],
         temperature=0.1,
     )
+    print(f"[IA] {source} -> modelo={model}", flush=True)
     content = resp.choices[0].message.content.strip()
     for prefix in ("```json", "```"):
         if content.startswith(prefix):
@@ -272,7 +273,7 @@ def upload():
         text_path = TEXTS_DIR / f"{unique_name}.txt"
         text_path.write_text(raw_text, encoding="utf-8")
         try:
-            notas = extract_with_ai(raw_text)
+            notas = extract_with_ai(raw_text, source="primary")
         except Exception as e:
             gemini_key = os.getenv("GOOGLE_GEMINI_API_KEY")
             if gemini_key:
@@ -282,6 +283,7 @@ def upload():
                         api_key=gemini_key,
                         base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
                         model=os.getenv("AI_FALLBACK_MODEL", "gemini-2.0-flash"),
+                        source="fallback",
                     )
                 except Exception as e2:
                     erros.append({"file": filename, "error": f"Erro IA primaria: {e} / fallback Gemini: {e2}"})
