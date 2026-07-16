@@ -162,11 +162,11 @@ def extract_text(filepath):
         return extract_text_pdf(filepath)
     return extract_text_image(filepath)
 
-def extract_with_ai(raw_text):
+def extract_with_ai(raw_text, api_key=None, base_url=None, model=None):
     from openai import OpenAI
-    api_key = os.getenv("OPENAI_API_KEY") or os.getenv("OPENROUTER_API_KEY")
-    base_url = os.getenv("OPENAI_BASE_URL", "https://openrouter.ai/api/v1")
-    model = os.getenv("AI_MODEL", "openai/gpt-4o-mini")
+    api_key = api_key or os.getenv("OPENAI_API_KEY") or os.getenv("OPENROUTER_API_KEY")
+    base_url = base_url or os.getenv("OPENAI_BASE_URL", "https://openrouter.ai/api/v1")
+    model = model or os.getenv("AI_MODEL", "openai/gpt-4o-mini")
     client = OpenAI(api_key=api_key, base_url=base_url)
     prompt = f"""O texto abaixo pode conter UMA OU MAIS notas fiscais.
 Extraia TODAS as notas fiscais encontradas. Para cada uma, extraia:
@@ -274,9 +274,23 @@ def upload():
         try:
             notas = extract_with_ai(raw_text)
         except Exception as e:
-            erros.append({"file": filename, "error": f"Erro IA: {str(e)}"})
-            save_path.unlink(missing_ok=True)
-            continue
+            gemini_key = os.getenv("GOOGLE_GEMINI_API_KEY")
+            if gemini_key:
+                try:
+                    notas = extract_with_ai(
+                        raw_text,
+                        api_key=gemini_key,
+                        base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+                        model=os.getenv("AI_FALLBACK_MODEL", "gemini-2.0-flash"),
+                    )
+                except Exception as e2:
+                    erros.append({"file": filename, "error": f"Erro IA primaria: {e} / fallback Gemini: {e2}"})
+                    save_path.unlink(missing_ok=True)
+                    continue
+            else:
+                erros.append({"file": filename, "error": f"Erro IA: {str(e)}"})
+                save_path.unlink(missing_ok=True)
+                continue
         save_path.unlink(missing_ok=True)
         for nota in notas:
             nf_num = nota.get("numero_nota", "").strip()
